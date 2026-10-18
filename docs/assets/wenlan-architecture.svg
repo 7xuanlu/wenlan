@@ -1,0 +1,121 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1100" viewBox="0 0 1600 1100">
+<defs>
+    <style>
+      text { font-family: 'PingFang TC','Helvetica Neue',Arial,sans-serif; fill:#1a1a2e; }
+      .title {font-size:36px;font-weight:600;letter-spacing:-.8px}
+      .heading {font-size:26px;font-weight:600;letter-spacing:-.3px}
+      .body {font-size:24px;font-weight:400;fill:#586174}
+      .label {font-size:22px;font-weight:500;fill:#586174}
+      .small {font-size:22px;font-weight:400;fill:#687184}
+      .icon {fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+      .wire {fill:none;stroke:#858896;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M2 1.5 8 5 2 8.5" fill="none" stroke="#858896" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></marker>
+    <symbol id="app" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M8 3v18M3 8h5"/></symbol>
+    <symbol id="tools" viewBox="0 0 24 24"><path d="M5 17.5 3 21v-6a8 8 0 0 1-1-4c0-4.4 4.5-8 10-8s10 3.6 10 8-4.5 8-10 8a12 12 0 0 1-7-1.5Z"/><path d="m8 9 3 3-3 3m6 0h3"/></symbol>
+    <symbol id="layers" viewBox="0 0 24 24"><path d="m12 3 10 5-10 5L2 8 12 3Zm-10 9 10 5 10-5M2 16l10 5 10-5"/></symbol>
+    <symbol id="database" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></symbol>
+    <symbol id="server" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01M12 6.5h5M12 17.5h5"/></symbol>
+    <symbol id="chip" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/><path d="M9 9h6v6H9zM9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></symbol>
+    <symbol id="cloud" viewBox="0 0 24 24"><path d="M6 19H18a4.5 4.5 0 0 0 .8-8.9A7 7 0 0 0 5.3 8.4 5.4 5.4 0 0 0 6 19Z"/></symbol>
+  
+  <symbol id="file" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z M14 2v6h6 M8 13h8 M8 17h6"/></symbol>
+  <symbol id="search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="7.5"/><path d="m16 16 5 5"/></symbol>
+  <symbol id="graph" viewBox="0 0 24 24"><circle cx="12" cy="4" r="2.5"/><circle cx="4" cy="18" r="2.5"/><circle cx="20" cy="18" r="2.5"/><path d="M10.7 6.3 5.3 15.7 M13.3 6.3l5.4 9.4 M6.5 18h11"/></symbol>
+  <symbol id="refresh" viewBox="0 0 24 24"><path d="M3 10a9 9 0 0 1 15.5-5.5L21 7 M21 2v5h-5 M21 14a9 9 0 0 1-15.5 5.5L3 17 M3 22v-5h5"/></symbol>
+
+  <symbol id="history" viewBox="0 0 24 24"><path d="M3 11a9 9 0 1 1 2.8 7 M3 4v7h7 M12 7v5l3 2"/></symbol>
+<marker id="warm-arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M2 1.5 8 5 2 8.5" fill="none" stroke="#a65330" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<rect width="1600" height="1100" fill="#fcfcfc"/>
+<text class="title" x="64" y="82">Wenlan Architecture</text>
+
+<rect x="550" y="148" width="986" height="698" rx="22" fill="#f4f5f5" stroke="#e3e7ee" stroke-width="1.5"/>
+<text class="label" x="584" y="192">Local core</text>
+
+<!-- Materials are inputs, not a second local storage system. -->
+<rect x="64" y="210" width="328" height="150" rx="12" fill="#fff" stroke="#e3e7ee" stroke-width="1.5"/>
+<use href="#file" x="88" y="234" width="30" height="30" class="icon" color="#687184"/>
+<text class="heading" x="132" y="260">Imported material</text>
+<text class="body" x="88" y="302">Documents · Obsidian</text>
+<text class="body" x="88" y="341">Exported conversations</text>
+
+<rect x="64" y="400" width="328" height="110" rx="12" fill="#fff" stroke="#e3e7ee" stroke-width="1.5"/>
+<use href="#app" x="88" y="423" width="30" height="30" class="icon" color="#687184"/>
+<text class="heading" x="132" y="449">App / CLI</text>
+<text class="body" x="132" y="489">Browse · edit</text>
+
+<rect x="64" y="550" width="328" height="180" rx="12" fill="#fff" stroke="#e3e7ee" stroke-width="1.5"/>
+<use href="#tools" x="88" y="574" width="30" height="30" class="icon" color="#687184"/>
+<text class="heading" x="132" y="600">AI tools</text>
+<text class="body" x="132" y="641">Claude · Codex, etc.</text>
+<text class="small" x="88" y="691">Uses the tool’s model</text>
+
+<!-- All input paths end at the shared API header, above the capability rows. -->
+<path class="wire" d="M400 285H416Q432 285 432 269V266Q432 250 448 250H556" marker-end="url(#arrow)"/>
+<path class="wire" d="M400 455H460Q476 455 476 439V302Q476 286 492 286H556" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+<path class="wire" d="M400 640H504Q520 640 520 624V338Q520 322 536 322H556" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+<text class="label" x="400" y="202">Import<tspan x="400" dy="30">&amp; index</tspan></text>
+<text class="label" x="405" y="616">MCP</text>
+<text class="label" x="405" y="674">Read / write</text>
+
+<!-- Local runtime; source ingestion does not require Steep. -->
+<rect x="568" y="218" width="512" height="594" rx="14" fill="#fff" stroke="#c9ccd6" stroke-width="1.8"/>
+<use href="#server" x="592" y="245" width="30" height="30" class="icon" color="#5e58c8"/>
+<text class="heading" x="636" y="271">Wenlan service</text>
+<text class="small" x="636" y="312">Shared read/write access</text>
+<path d="M568 336H1080" stroke="#e3e7ee" stroke-width="1.5"/>
+
+<use href="#search" x="592" y="360" width="28" height="28" class="icon" color="#687184"/>
+<text class="heading" x="636" y="385">Hybrid retrieval</text>
+<text class="body" x="636" y="426">Keyword · semantic · graph aid</text>
+<text class="body" x="636" y="466">Rank fusion (RRF)</text>
+<use href="#chip" x="636" y="484" width="23" height="23" class="icon" color="#687184"/>
+<text class="small" x="670" y="504">Local search model</text>
+<path d="M592 525H1056" stroke="#e7ebed" stroke-width="1.5"/>
+
+<use href="#graph" x="592" y="549" width="28" height="28" class="icon" color="#687184"/>
+<text class="heading" x="636" y="574">Citation tracking</text>
+<text class="body" x="636" y="615">Source changes → flag pages</text>
+<path class="wire" style="stroke:#a65330" d="M606 588V651" stroke="#858896" marker-end="url(#warm-arrow)"/>
+<path d="M636 642H1056" stroke="#e7ebed" stroke-width="1.5"/>
+
+<use href="#refresh" x="592" y="666" width="28" height="28" class="icon" color="#a65330"/>
+<text class="heading" x="636" y="691">Steep</text>
+<text class="small" x="1056" y="691" text-anchor="end">Enabled + model</text>
+<text class="body" x="636" y="737">Eligible pages → auto-update</text>
+<text class="body" x="636" y="780">Your pages / edits → review</text>
+
+<!-- Persistent objects and their explicit evidence relationship. -->
+<path class="wire" style="stroke:#a65330" d="M1092 575H1140" marker-start="url(#warm-arrow)" marker-end="url(#warm-arrow)"/>
+<text class="heading" x="1176" y="245">Local knowledge base</text>
+<rect x="1152" y="273" width="360" height="462" rx="14" fill="#fff" stroke="#e3e7ee" stroke-width="1.5"/>
+<use href="#layers" x="1176" y="302" width="28" height="28" class="icon" color="#a65330"/>
+<text class="heading" x="1220" y="327">Knowledge pages</text>
+<text class="body" x="1220" y="370">Markdown files</text>
+
+<path class="wire" d="M1190 350V465" marker-end="url(#arrow)"/>
+<text class="label" x="1214" y="427">Cites</text>
+
+<use href="#database" x="1176" y="478" width="28" height="28" class="icon" color="#687184"/>
+<text class="heading" x="1220" y="491">Memories &amp;<tspan x="1220" dy="30">source references</tspan></text>
+<text class="body" x="1220" y="561">Graph · search index</text>
+<path d="M1176 576H1488" stroke="#e3e7ee" stroke-width="1.5"/>
+<use href="#history" x="1176" y="599" width="28" height="28" class="icon" color="#687184"/>
+<text class="heading" x="1220" y="624">Version history</text>
+<text class="body" x="1220" y="699">libSQL database</text>
+
+<!-- Optional upkeep model choices; distinct from search embeddings and client models. -->
+<path class="wire" d="M824 824V900" marker-end="url(#arrow)" stroke-dasharray="5 7"/>
+<text class="label" x="854" y="886">Optional · background enrichment</text>
+<rect x="568" y="914" width="968" height="142" rx="14" fill="#fff" stroke="#e3e7ee" stroke-width="1.5"/>
+<use href="#chip" x="598" y="940" width="30" height="30" class="icon" color="#687184"/>
+<text class="heading" x="644" y="965" style="font-size:24px">On-device model</text>
+<path d="M880 934V1036M1234 934V1036" stroke="#e3e7eb" stroke-width="1.5"/>
+<use href="#server" x="914" y="940" width="30" height="30" class="icon" color="#687184"/>
+<text class="heading" x="960" y="965" style="font-size:24px">Local server</text>
+<use href="#cloud" x="1268" y="940" width="30" height="30" class="icon" color="#687184"/>
+<text class="heading" x="1314" y="965" style="font-size:24px">Cloud API</text>
+<text class="small" x="724" y="1016" text-anchor="middle">Download in the app</text>
+<text class="small" x="1057" y="1016" text-anchor="middle">Host Ollama / LM Studio</text>
+<text class="small" x="1385" y="1016" text-anchor="middle">Connect your provider</text>
+</svg>

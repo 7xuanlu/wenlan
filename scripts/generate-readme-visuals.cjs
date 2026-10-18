@@ -19,32 +19,34 @@ const TOOL_DIR = path.join(__dirname, "readme-visuals");
 const visualRequire = createRequire(path.join(TOOL_DIR, "package.json"));
 
 const BANNER_VIEWPORTS = {
-  desktop: { width: 1280, height: 440 },
-  mobile: { width: 720, height: 300 },
+  desktop: { width: 1120, height: 350 },
+  mobile: { width: 720, height: 256 },
 };
 
 const BANNER = {
-  dark: "#101024",
+  // Deep ink blue complements the logo; preserve the established text colors.
+  dark: "#151D2B",
   white: "#F7F8FF",
-  cyan: "#93E3F2",
-  latin: 'Arial, "Helvetica Neue", sans-serif',
+  accent: "#93E3F2",
+  secondary: "#BAC4D2",
+  latin: '-apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", Arial, sans-serif',
 };
 
 const BANNER_COPY = {
   en: {
-    title: ["A living personal wiki.", "AI organizes. You stay in control."],
+    title: ["A living personal wiki"],
     font: BANNER.latin,
   },
   "zh-Hant": {
-    title: ["持續更新的個人維基。", "AI 幫你整理，你保有主導權。"],
-    font: 'Arial, "PingFang TC", sans-serif',
+    title: ["持續更新的個人知識庫"],
+    font: '"PingFang TC", "Noto Sans TC", -apple-system, BlinkMacSystemFont, sans-serif',
   },
   "zh-Hans": {
-    title: ["持续更新的个人维基。", "AI 帮你整理，你保有主导权。"],
-    font: 'Arial, "PingFang SC", sans-serif',
+    title: ["持续更新的个人知识库"],
+    font: '"PingFang SC", "Noto Sans SC", -apple-system, BlinkMacSystemFont, sans-serif',
   },
   "es-ES": {
-    title: ["Una wiki personal viva.", "La IA organiza. Tú tienes el control."],
+    title: ["Una wiki personal viva"],
     font: BANNER.latin,
   },
 };
@@ -86,25 +88,22 @@ function makeSimpleBanner(viewport, locale) {
   const prefix = `banner-${locale}-${viewport}`;
   const text = (x, y, value, size, color = BANNER.white, weight = 400, anchor = "start", letterSpacing = null) =>
     `<text x="${x}" y="${y}" fill="${color}" font-family="${esc(copy.font)}" font-size="${size}" font-weight="${weight}" text-anchor="${anchor}"${letterSpacing === null ? "" : ` letter-spacing="${letterSpacing}"`}>${esc(value)}</text>`;
+  const chineseName = locale === "zh-Hant" ? "文瀾" : locale === "zh-Hans" ? "文澜" : "";
+  const brand = (x, y, size, anchor) =>
+    `<text x="${x}" y="${y}" fill="${BANNER.accent}" font-size="${size}" font-weight="500" text-anchor="${anchor}"><tspan font-family="${esc(BANNER.latin)}">Wenlan</tspan>${chineseName ? `<tspan dx="12" font-family="${esc(copy.font)}">${chineseName}</tspan>` : ""}</text>`;
   const content = mobile
-    ? `${logoMarkup({ x: 294, y: 30, size: 132, prefix })}
-  ${text(360, 190, "WENLAN", 28, BANNER.cyan, 700, "middle", 4)}
-  ${text(360, 232, copy.title[0], 34, BANNER.white, 700, "middle")}
-  ${text(360, 270, copy.title[1], 34, BANNER.white, 700, "middle")}`
-    : `${logoMarkup({ x: 144, y: 104, size: 232, prefix })}
-  ${text(440, 174, "WENLAN", 34, BANNER.cyan, 700, "start", 4)}
-  ${text(440, 235, copy.title[0], 42, BANNER.white, 700, "start")}
-  ${text(440, 283, copy.title[1], 42, BANNER.white, 700, "start")}`;
-  const frame = mobile
-    ? '<rect x="24" y="16" width="672" height="268" rx="24" fill="#101024" stroke="#2F3769"/>'
-    : '<rect x="64" y="28" width="1152" height="384" rx="30" fill="#101024" stroke="#2F3769"/>';
+    ? `${logoMarkup({ x: 320, y: 32, size: 80, prefix })}
+  ${brand(360, 150, chineseName ? 29.12 : 30.24, "middle")}
+  ${text(360, 195, copy.title[0], 32, BANNER.white, 500, "middle")}`
+    : `${logoMarkup({ x: 81.28, y: 84.28, size: 181.44, prefix })}
+  ${brand(300, 153, chineseName ? 41.6 : 43.2, "start")}
+  ${text(300, 219, copy.title[0], 40, BANNER.white, 500, "start", chineseName ? 0.65 : null)}`;
 
   const svg = `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
   <title id="title">Wenlan README banner</title>
   <desc id="desc">${esc(`Wenlan: ${copy.title.join(" ")}`)}</desc>
   <rect width="${width}" height="${height}" fill="${BANNER.dark}"/>
-  ${frame}
-  ${content}
+  ${mobile ? content : `<g transform="translate(172 0)">${content}</g>`}
   <defs>
     ${logoDefs(prefix)}
   </defs>
@@ -117,7 +116,7 @@ function makeSimpleBanner(viewport, locale) {
     width,
     height,
     background: BANNER.dark,
-    requiredCopy: ["WENLAN", ...copy.title],
+    requiredCopy: ["Wenlan", ...(chineseName ? [chineseName] : []), ...copy.title],
     svg,
   };
 }
@@ -183,7 +182,7 @@ async function renderSvgToPng(asset, pngPath) {
   }
   const browser = await chromium.launch({ headless: true });
   try {
-    const rasterScale = asset.group === "banner" ? 2 : 1;
+    const rasterScale = asset.group === "banner" ? 3 : 1;
     const context = await browser.newContext({
       viewport: { width: asset.width, height: asset.height },
       deviceScaleFactor: rasterScale,

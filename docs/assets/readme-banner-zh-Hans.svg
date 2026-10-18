@@ -1,16 +1,14 @@
-<svg width="1280" height="440" viewBox="0 0 1280 440" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+<svg width="1120" height="350" viewBox="0 0 1120 350" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
   <title id="title">Wenlan README banner</title>
-  <desc id="desc">Wenlan: 持续更新的个人维基。 AI 帮你整理，你保有主导权。</desc>
-  <rect width="1280" height="440" fill="#101024"/>
-  <rect x="64" y="28" width="1152" height="384" rx="30" fill="#101024" stroke="#2F3769"/>
-  <g transform="translate(144 104) scale(0.453125)">
+  <desc id="desc">Wenlan: 持续更新的个人知识库</desc>
+  <rect width="1120" height="350" fill="#151D2B"/>
+  <g transform="translate(172 0)"><g transform="translate(81.28 84.28) scale(0.354375)">
     <rect width="512" height="512" rx="112" fill="#1A1A2E"/>
     <circle cx="256" cy="256" r="160" fill="none" stroke="url(#banner-zh-Hans-desktop-ring)" stroke-width="76"/>
     <circle cx="322" cy="160" r="42" fill="url(#banner-zh-Hans-desktop-orb)"/>
   </g>
-  <text x="440" y="174" fill="#93E3F2" font-family="Arial, &quot;PingFang SC&quot;, sans-serif" font-size="34" font-weight="700" text-anchor="start" letter-spacing="4">WENLAN</text>
-  <text x="440" y="235" fill="#F7F8FF" font-family="Arial, &quot;PingFang SC&quot;, sans-serif" font-size="42" font-weight="700" text-anchor="start">持续更新的个人维基。</text>
-  <text x="440" y="283" fill="#F7F8FF" font-family="Arial, &quot;PingFang SC&quot;, sans-serif" font-size="42" font-weight="700" text-anchor="start">AI 帮你整理，你保有主导权。</text>
+  <text x="300" y="153" fill="#93E3F2" font-size="41.6" font-weight="500" text-anchor="start"><tspan font-family="-apple-system, BlinkMacSystemFont, &quot;SF Pro Display&quot;, &quot;Helvetica Neue&quot;, Arial, sans-serif">Wenlan</tspan><tspan dx="12" font-family="&quot;PingFang SC&quot;, &quot;Noto Sans SC&quot;, -apple-system, BlinkMacSystemFont, sans-serif">文澜</tspan></text>
+  <text x="300" y="219" fill="#F7F8FF" font-family="&quot;PingFang SC&quot;, &quot;Noto Sans SC&quot;, -apple-system, BlinkMacSystemFont, sans-serif" font-size="40" font-weight="500" text-anchor="start" letter-spacing="0.65">持续更新的个人知识库</text></g>
   <defs>
     <linearGradient id="banner-zh-Hans-desktop-ring" x1="96" y1="256" x2="416" y2="256" gradientUnits="userSpaceOnUse">
       <stop stop-color="#6C63FF"/>

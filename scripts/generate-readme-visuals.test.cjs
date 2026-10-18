@@ -17,12 +17,12 @@ const {
 
 const ASSET_DIR = path.resolve(__dirname, "..", "docs", "assets");
 
-test("approved banners use the simple four-locale tagline and preserve HEAD geometry", () => {
+test("borderless banners preserve four-locale copy in desktop and mobile layouts", () => {
   const expected = {
-    en: ["A living personal wiki.", "AI organizes. You stay in control."],
-    "zh-Hant": ["持續更新的個人維基。", "AI 幫你整理，你保有主導權。"],
-    "zh-Hans": ["持续更新的个人维基。", "AI 帮你整理，你保有主导权。"],
-    "es-ES": ["Una wiki personal viva.", "La IA organiza. Tú tienes el control."],
+    en: ["A living personal wiki", "AI organizes. You stay in control."],
+    "zh-Hant": ["持續更新的個人知識庫", "AI 幫你整理，你保有主導權"],
+    "zh-Hans": ["持续更新的个人知识库", "AI 帮你整理，你保有主导权"],
+    "es-ES": ["Una wiki personal viva", "La IA organiza. Tú tienes el control."],
   };
 
   for (const [locale, lines] of Object.entries(expected)) {
@@ -30,23 +30,15 @@ test("approved banners use the simple four-locale tagline and preserve HEAD geom
       const banner = makeBanner(viewport, locale);
       const suffix = locale === "en" ? "" : `-${locale}`;
       assert.equal(banner.name, `readme-banner${suffix}${viewport === "mobile" ? "-mobile" : ""}`);
-      assert.deepEqual([banner.width, banner.height], viewport === "desktop" ? [1280, 440] : [720, 300]);
+      assert.deepEqual([banner.width, banner.height], viewport === "desktop" ? [1120, 350] : [720, 256]);
       assert.match(banner.svg, new RegExp(`>${lines[0].replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}<`, "u"));
-      assert.match(banner.svg, new RegExp(`>${lines[1].replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}<`, "u"));
-      assert.equal((banner.svg.match(/letter-spacing="4"/gu) ?? []).length, 1);
+      assert.doesNotMatch(banner.svg, new RegExp(`>${lines[1].replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}<`, "u"));
+      assert.doesNotMatch(banner.svg, /letter-spacing="4"|>WENLAN</u);
+      assert.match(banner.svg, />Wenlan<\/tspan>/u);
       assert.doesNotMatch(banner.svg, /data-fit-region|input-1|input-2|topic-page|\[1\]|\[2\]/u);
-      assert.match(
-        banner.svg,
-        viewport === "desktop"
-          ? /transform="translate\(144 104\) scale\(0\.453125\)"/u
-          : /transform="translate\(294 30\) scale\(0\.2578125\)"/u,
-      );
-      assert.match(
-        banner.svg,
-        viewport === "desktop"
-          ? /<rect x="64" y="28" width="1152" height="384" rx="30"/u
-          : /<rect x="24" y="16" width="672" height="268" rx="24"/u,
-      );
+      assert.doesNotMatch(banner.svg, /stroke="#2F3769"/u);
+      assert.equal((banner.svg.match(/<rect /gu) ?? []).length, 2, "only background and logo tile");
+
     }
   }
 });
@@ -156,16 +148,17 @@ test("every knowledge-network locale keeps direction and strength semantics", ()
   }
 });
 
-test("diagrams retain bounded model, review, and citation claims", () => {
+test("lifecycle explains traceable history, evidence updates, and review in plain language", () => {
   for (const viewport of ["desktop", "mobile"]) {
     const overview = makeOverview("en", viewport).svg;
     const lifecycle = makeLifecycle("en", viewport).svg;
     const network = makeKnowledgeNetwork("en", viewport).svg;
     assert.match(overview, /configured model/u);
     assert.match(overview, /Automatic refresh proposes changes/u);
-    assert.match(lifecycle, /ADDED FROM THE UI REVIEW/u);
-    assert.match(lifecycle, /AUTOMATIC REFRESH · EDITED PAGE/u);
-    assert.match(lifecycle, /Supersession keeps the earlier memory/u);
+    assert.match(lifecycle, /Earlier knowledge stays traceable/u);
+    assert.match(lifecycle, /New evidence improves the note/u);
+    assert.match(lifecycle, /AI changes to your edited page wait for review/u);
+    assert.doesNotMatch(lifecycle, /Model steps need a configured model|Conflict reconciliation is off by default/u);
     assert.doesNotMatch(lifecycle, /VERIFIED REBUILD|Archive, never delete|On-device \/ off/u);
     assert.match(network, /Illustrative example/u);
     assert.doesNotMatch(network, /Pages connect through Entities/u);
@@ -226,18 +219,20 @@ test("network and lifecycle continue the same concrete Agent Loop example", () =
       assert.match(network, /Retry rule|重试准则|重試準則/u);
       assert.match(lifecycle, /Tests passed|测试通过就算完成|測試通過就算完成/u);
       assert.match(lifecycle, /Tests \+ visual checks|测试之外，也要看画面|測試之外，也要看畫面/u);
-      assert.match(lifecycle, /Tests missed a covered label|测试漏掉了被连线遮住的标签|測試漏掉了被連線遮住的標籤/u);
-      assert.match(lifecycle, /Proposed changes wait|修订提案等你审核|修訂提案等你審核/u);
+      assert.match(lifecycle, /ADDED FROM THE UI REVIEW|从这次审查补上的规则|從這次審查補上的規則/u);
+      assert.match(lifecycle, /Earlier knowledge stays traceable|先前的判斷仍可追溯|先前的判断仍可追溯/u);
+      assert.match(lifecycle, /AI changes to your edited page wait for review|AI 對你編輯過的頁面所做的修改，會先等你審核|AI 对你编辑过的页面所做的修改，会先等你审核/u);
     }
   }
 });
 
-test("lifecycle keeps one readable upkeep explanation and localized stale labels", () => {
+test("lifecycle removes technical upkeep jargon and keeps localized update labels", () => {
   for (const locale of ["en", "zh-Hans", "zh-Hant"]) {
     for (const viewport of ["desktop", "mobile"]) {
       const { svg } = makeLifecycle(locale, viewport);
       assert.doesNotMatch(svg, />UNDERSTAND<|>RECONCILE<|>VERIFY<|>理解<|>核對</u);
-      assert.match(svg, /configured model|模型步骤需配置模型|模型步驟需設定模型/u);
+      assert.doesNotMatch(svg, /configured model|模型步骤需配置模型|模型步驟需設定模型|默认关闭|預設關閉|off by default|Conflict reconciliation is off by default|冲突校正默认关闭|衝突校正預設關閉/u);
+      assert.doesNotMatch(svg, />REFINERY<|精炼|精煉|>ENRICH<|丰富|豐富|>RECONCILE<|校正|SUPERSEDES|OPTIONAL CONFLICT REVIEW|ENRICH|CONNECT/u);
       if (locale !== "en") {
         assert.doesNotMatch(svg, />STALE</u);
         assert.match(svg, />待更新</u);
