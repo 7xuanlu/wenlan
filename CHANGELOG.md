@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.19.2](https://github.com/wenlan-app/wenlan/compare/v0.19.1...v0.19.2) (2026-10-18)
+
+
+### Features
+
+* **app:** guide new users with a self-checking getting-started home ([#876](https://github.com/wenlan-app/wenlan/issues/876)) ([465e2fd](https://github.com/wenlan-app/wenlan/commit/465e2fd8c7ef57893fab802bac83107f8c92cd28))
+* **brief:** record Brief history and read past versions ([#878](https://github.com/wenlan-app/wenlan/issues/878)) ([195eab3](https://github.com/wenlan-app/wenlan/commit/195eab3a1174618672e40fe0987b95d7e94a5cde))
+* **pages:** agents edit pages directly; manual review lock ([#879](https://github.com/wenlan-app/wenlan/issues/879)) ([5938d7e](https://github.com/wenlan-app/wenlan/commit/5938d7e104c5ba4b6729f67be6592f812358838f))
+* **pages:** say why a revision card needs review and who wrote each version ([#882](https://github.com/wenlan-app/wenlan/issues/882)) ([b863529](https://github.com/wenlan-app/wenlan/commit/b863529f677fcc725239b1f75b4aef9c6c13b3e3))
+* **plugin:** handoff brings the pages a session used up to date ([#880](https://github.com/wenlan-app/wenlan/issues/880)) ([91e6239](https://github.com/wenlan-app/wenlan/commit/91e6239640543f417b9c3e430d9c379eae80e313))
+
+
+### Bug Fixes
+
+* **app:** call Wiki documents notes everywhere in the app UI ([#883](https://github.com/wenlan-app/wenlan/issues/883)) ([a09cafe](https://github.com/wenlan-app/wenlan/commit/a09cafee771527c51b4a175339b8294900fbe9ce))
+
 ## [0.19.1](https://github.com/wenlan-app/wenlan/compare/v0.19.0...v0.19.1) (2026-10-14)
 
 
