@@ -112,6 +112,14 @@ describe("PairingApprovalDialog", () => {
     expect(buttons().slice(-2)).toEqual(["Deny", "Allow"]);
   });
 
+  it("names Muse by its own host, without the unknown-app warning", async () => {
+    mocks.lookupRemotePairing.mockResolvedValue({ ...claude, clientName: "Muse", redirectHost: "agent.meta.ai", knownClient: true });
+    setPendingPairingCode(SHORT);
+    mount();
+    expect(await screen.findByRole("heading", { name: "Allow Muse to search your library?" })).toBeInTheDocument();
+    expect(screen.queryByText(/wenlan doesn't recognize/i)).not.toBeInTheDocument();
+  });
+
   it("does not trust a known flag when the host is not the app's own", async () => {
     mocks.lookupRemotePairing.mockResolvedValue({ ...claude, redirectHost: "claude.ai.evil.example", knownClient: true });
     setPendingPairingCode(SHORT);
